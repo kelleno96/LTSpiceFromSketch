@@ -34,8 +34,11 @@ uv pip install -e .
 ## Run
 
 ```sh
-uv run streamlit run app.py
+./run.sh                    # syncs deps and starts the app
+./run.sh --server.port 9000 # extra args pass through to streamlit
 ```
+
+Or directly: `uv run streamlit run app.py`.
 
 Then: upload a photo → **Analyze sketch** → check the redrawn schematic against your
 photo and correct anything the model misread in the table (low-confidence reads are
