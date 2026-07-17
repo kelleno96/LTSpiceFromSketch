@@ -39,9 +39,10 @@ uv pip install -e .
 ./run.sh --server.port 9000                 # extra args pass through to streamlit
 ```
 
-The vision endpoint defaults to `http://127.0.0.1:8080/v1`; override it with
-`--vision-url` or the `LOCAL_VISION_URL` env var (include the trailing `/v1` — it's
-an OpenAI-compatible base URL). Or run directly: `uv run streamlit run app.py`.
+The vision endpoint defaults to `http://127.0.0.1:8080/v1`. You can change it in the
+app's sidebar (**Local model endpoint**), or set the default with `--vision-url` /
+the `LOCAL_VISION_URL` env var (include the trailing `/v1` — it's an OpenAI-compatible
+base URL). Or run directly: `uv run streamlit run app.py`.
 
 Then: upload a photo → **Analyze sketch** → check the redrawn schematic against your
 photo and correct anything the model misread in the table (low-confidence reads are

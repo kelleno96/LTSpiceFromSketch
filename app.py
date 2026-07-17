@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -10,7 +12,9 @@ from sketch2spice import simulate
 from sketch2spice.model import Analysis, Circuit, Component
 from sketch2spice.netlist import to_asc, to_netlist
 from sketch2spice.viz import render_schematic
-from sketch2spice.vision import extract_circuit
+from sketch2spice.vision import LocalOpenAIBackend, extract_circuit
+
+DEFAULT_VISION_URL = os.environ.get("LOCAL_VISION_URL", "http://127.0.0.1:8080/v1")
 
 COMPONENT_KINDS = [
     "resistor",
@@ -92,13 +96,21 @@ with st.sidebar:
         "Model used to read the sketch",
         options=["local", "anthropic"],
         format_func=lambda x: {
-            "local": "Local (llama.cpp @ :8080)",
+            "local": "Local (OpenAI-compatible)",
             "anthropic": "Claude API (needs key)",
         }[x],
         index=0,
     )
+    vision_url = DEFAULT_VISION_URL
+    if backend_choice == "local":
+        vision_url = st.text_input(
+            "Local model endpoint",
+            value=DEFAULT_VISION_URL,
+            help="OpenAI-compatible base URL — include the trailing /v1, "
+            "e.g. http://127.0.0.1:8080/v1. Defaults to LOCAL_VISION_URL / --vision-url.",
+        )
     st.caption(
-        "Local runs against http://127.0.0.1:8080 with no API key. "
+        "Local runs against the endpoint above with no API key. "
         "Claude needs ANTHROPIC_API_KEY set in the environment."
     )
 
@@ -113,10 +125,15 @@ if uploaded is not None:
     if col_do.button("Analyze sketch", type="primary"):
         with st.spinner("Reading the sketch..."):
             try:
+                backend = (
+                    LocalOpenAIBackend(base_url=vision_url.strip())
+                    if backend_choice == "local"
+                    else backend_choice
+                )
                 circuit = extract_circuit(
                     uploaded.getvalue(),
                     uploaded.type or "image/png",
-                    backend=backend_choice,
+                    backend=backend,
                 )
                 st.session_state.circuit = circuit
                 st.session_state.netlist_text = to_netlist(circuit)
