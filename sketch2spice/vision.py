@@ -25,14 +25,21 @@ converting it into a structured netlist.
 
 Rules:
 - Identify every component: resistors, capacitors, inductors, voltage sources, \
-current sources, and diodes.
-- Assign each component a reference designator (R1, C1, V1, ...) and read its value \
-as written (e.g. "1k", "10u", "5V"). For a source, capture its full spec if given \
-(e.g. "SINE(0 5 1k)" or "DC 5"); if only a number is shown, use it.
+current sources, diodes, bipolar transistors (bjt), MOSFETs (mosfet), and op-amps \
+(opamp).
+- Assign each component a reference designator (R1, C1, V1, Q1, M1, U1, ...) and read \
+its value as written (e.g. "1k", "10u", "5V"). For a source, capture its full spec if \
+given (e.g. "SINE(0 5 1k)" or "DC 5"); if only a number is shown, use it.
 - Trace the wires to determine which net (node) each terminal connects to. Give nets \
 short names; label the ground/reference net "0". Two terminals joined by a wire share \
 one net name.
-- For a voltage or current source, list the + terminal's net first.
+- Terminal order in "nodes" depends on the kind: two-terminal parts give two nets; \
+for a voltage/current source list the + terminal first; for a diode list anode then \
+cathode; for a bjt list collector, base, emitter; for a mosfet list drain, gate, \
+source (and bulk if drawn); for an opamp list non-inverting input (+), inverting \
+input (-), then output.
+- For a bjt set "subtype" to "npn" or "pnp"; for a mosfet set "subtype" to "nmos" or \
+"pmos" (read the arrow/symbol direction, or guess npn/nmos if unclear and note it).
 - Choose a sensible analysis: transient (".tran") for anything with a time-varying \
 source, otherwise an operating point (".op"). Provide the analysis arguments.
 - Put anything you could not read clearly, or any guess you made, into "notes", and \

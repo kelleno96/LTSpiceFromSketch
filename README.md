@@ -72,6 +72,10 @@ dialects (`SINE(` → `SIN(`, and giving `.tran` the two arguments ngspice requi
 
 ## Scope
 
-Two-terminal parts today: resistors, capacitors, inductors, voltage/current sources,
-and diodes, with transient / AC / operating-point / DC analyses. Transistors and op-amps
-are the intended next step — add a `kind` in `model.py` and a branch in `netlist.py`.
+Supported parts: resistors, capacitors, inductors, voltage/current sources, diodes,
+BJTs, MOSFETs, and op-amps, with transient / AC / operating-point / DC analyses.
+Transistors use ngspice's default device models; op-amps are an ideal high-gain VCVS
+subcircuit (good for feedback amplifiers). Set a component's `subtype` (npn/pnp,
+nmos/pmos) in the review table for transistors. Adding another device kind means: a
+prefix in `model.py` (`KIND_PREFIX`/`KIND_TERMINALS`), a branch in `netlist.py`, a
+symbol in `viz.py`, and a mention in the vision prompt.

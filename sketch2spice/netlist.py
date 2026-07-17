@@ -69,29 +69,63 @@ def _node(name: str, gmap: dict[str, str]) -> str:
     return gmap.get(name, name)
 
 
+# Minimal ideal op-amp subcircuit (a high-gain VCVS). Portable to ngspice and
+# LTspice; adequate for feedback amplifier topologies. Terminals: IN+ IN- OUT.
+_OPAMP_SUBCKT = [
+    ".subckt OPAMP inp inn out",
+    "E1 out 0 inp inn 100k",
+    ".ends",
+]
+
+
+def _ref(comp: Component) -> str:
+    """Reference designator, prefixed to its SPICE element type if needed."""
+    prefix = KIND_PREFIX[comp.kind]
+    return comp.ref if comp.ref[:1].upper() == prefix else f"{prefix}{comp.ref}"
+
+
 def to_netlist(circuit: Circuit) -> str:
     """Render ``circuit`` as SPICE netlist text."""
     gmap = _ground_map(circuit)
     lines: list[str] = [f"* {circuit.title}"]
-
-    diode_models: dict[str, None] = {}
+    models: dict[str, str] = {}  # model name -> ".model ..." line (deduped)
+    need_opamp = False
 
     for comp in circuit.components:
-        prefix = KIND_PREFIX[comp.kind]
-        # Keep the sketch's designator if it already starts with the right prefix,
-        # otherwise prefix it so the SPICE element type is unambiguous.
-        ref = comp.ref if comp.ref[:1].upper() == prefix else f"{prefix}{comp.ref}"
-        nodes = " ".join(_node(n, gmap) for n in comp.nodes)
+        ref = _ref(comp)
+        nodes = [_node(n, gmap) for n in comp.nodes]
 
         if comp.kind == "diode":
             model = comp.model or "Dgeneric"
-            diode_models[model] = None
-            lines.append(f"{ref} {nodes} {model}".rstrip())
-        else:
-            lines.append(f"{ref} {nodes} {comp.value}".rstrip())
+            models[model] = f".model {model} D"
+            lines.append(f"{ref} {' '.join(nodes[:2])} {model}")
 
-    for model in diode_models:
-        lines.append(f".model {model} D")
+        elif comp.kind == "bjt":
+            npn = (comp.subtype or "npn").lower() != "pnp"
+            model = comp.model or ("QNPN" if npn else "QPNP")
+            models[model] = f".model {model} {'NPN' if npn else 'PNP'}"
+            # C B E; ngspice defaults give a working Gummel-Poon model.
+            lines.append(f"{ref} {' '.join(nodes[:3])} {model}")
+
+        elif comp.kind == "mosfet":
+            nmos = (comp.subtype or "nmos").lower() not in ("pmos", "pfet", "p")
+            model = comp.model or ("MNMOS" if nmos else "MPMOS")
+            models[model] = f".model {model} {'NMOS' if nmos else 'PMOS'}"
+            dgsb = nodes[:4]
+            if len(dgsb) == 3:  # bulk defaults to source
+                dgsb = dgsb + [dgsb[2]]
+            lines.append(f"{ref} {' '.join(dgsb)} {model}")
+
+        elif comp.kind == "opamp":
+            need_opamp = True
+            lines.append(f"{ref} {' '.join(nodes[:3])} OPAMP")
+
+        else:  # two-terminal passives and sources
+            lines.append(f"{ref} {' '.join(nodes[:2])} {comp.value}".rstrip())
+
+    lines.extend(models.values())
+    if need_opamp:
+        lines.extend(_OPAMP_SUBCKT)
 
     lines.append(f".{circuit.analysis.type} {circuit.analysis.args}".rstrip())
     lines.append(".end")

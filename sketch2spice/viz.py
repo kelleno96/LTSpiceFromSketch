@@ -13,12 +13,17 @@ from __future__ import annotations
 
 import re
 
-from sketch2spice.model import Circuit, Component
+from sketch2spice.model import KIND_TERMINALS, Circuit, Component
 
 DX = 3.0       # horizontal spacing between top-rail nodes
 Y_TOP = 3.0    # top rail height
 Y_GND = 0.0    # ground rail height
 SHUNT_DX = 1.4  # offset for a 2nd/3rd shunt on the same node
+
+# Kinds with more than two terminals -- these don't fit the ladder layout, so a
+# circuit containing any of them is drawn with the net-label renderer instead.
+_MULTI = {"bjt", "mosfet", "opamp"}
+_TWO_TERM = {"resistor", "capacitor", "inductor", "voltage_source", "current_source", "diode"}
 
 
 def _is_gnd(net: str, ground: str) -> bool:
@@ -29,6 +34,7 @@ def _element(comp: Component):
     import schemdraw.elements as elm
 
     k = comp.kind
+    sub = (comp.subtype or "").lower()
     if k == "resistor":
         return elm.Resistor()
     if k == "capacitor":
@@ -43,7 +49,26 @@ def _element(comp: Component):
         if comp.value and re.search(r"sin|pulse|ac\b", comp.value, re.I):
             return elm.SourceSin()
         return elm.SourceV()
+    if k == "bjt":
+        return elm.BjtPnp() if sub == "pnp" else elm.BjtNpn()
+    if k == "mosfet":
+        return elm.PFet() if sub in ("pmos", "pfet", "p") else elm.NFet()
+    if k == "opamp":
+        return elm.Opamp()
     return elm.Resistor()
+
+
+def _terminal_anchors(comp: Component) -> list[tuple[str, str]]:
+    """(schemdraw anchor, human terminal label) per terminal, in nodes order."""
+    k = comp.kind
+    if k == "bjt":
+        return [("collector", "C"), ("base", "B"), ("emitter", "E")]
+    if k == "mosfet":
+        return [("drain", "D"), ("gate", "G"), ("source", "S")]
+    if k == "opamp":  # nodes order is IN+, IN-, OUT
+        return [("in2", "IN+"), ("in1", "IN-"), ("out", "OUT")]
+    t = KIND_TERMINALS.get(k, ["n1", "n2"])
+    return [("start", t[0]), ("end", t[1])]
 
 
 def _label(comp: Component) -> str:
@@ -97,9 +122,41 @@ def _order_nets(circuit: Circuit, ground: str, src: Component | None) -> list[st
     return order
 
 
+def _render_net_labels(circuit: Circuit) -> bytes:
+    """Schematic with net-name labels on terminals (for active-device circuits).
+
+    The ladder layout only handles two-terminal parts, so once a transistor or
+    op-amp is present we draw each component with its real symbol on a grid and
+    tag every terminal with its net name. It reads like a schematic with net
+    labels (a legitimate style) and works for any topology.
+    """
+    import schemdraw
+
+    schemdraw.use("matplotlib")
+    comps = [c for c in circuit.components if c.nodes]
+
+    d = schemdraw.Drawing()
+    cols, cw, ch = 3, 5.5, 5.0
+    for i, comp in enumerate(comps):
+        row, col = divmod(i, cols)
+        e = _element(comp).at((col * cw, -row * ch))
+        if comp.kind in _TWO_TERM:
+            e = e.right()
+        e = e.label(_label(comp), loc="top", color=_label_color(comp))
+        for (anchor, term), net in zip(_terminal_anchors(comp), comp.nodes):
+            e = e.label(f"{term}={net}", loc=anchor, fontsize=9, color="#2f6fb0")
+        d += e
+
+    d.draw(show=False)
+    return d.get_imagedata("png")
+
+
 def render_schematic(circuit: Circuit) -> bytes:
     """Draw ``circuit`` as a schematic and return PNG bytes."""
     import schemdraw
+
+    if any(c.kind in _MULTI for c in circuit.components):
+        return _render_net_labels(circuit)
 
     schemdraw.use("matplotlib")
 

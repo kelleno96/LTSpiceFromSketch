@@ -11,8 +11,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Two-terminal parts we support today. Adding a transistor or op-amp means adding
-# a kind here and a branch in netlist.to_netlist -- nothing else changes.
+# Components we support. Two-terminal passives/sources plus multi-terminal active
+# devices (BJT, MOSFET, op-amp). Adding a kind means: a prefix in KIND_PREFIX,
+# terminal names in KIND_TERMINALS, a branch in netlist.to_netlist, and a symbol
+# in viz. -- and a mention in the vision prompt.
 ComponentKind = Literal[
     "resistor",
     "capacitor",
@@ -20,12 +22,16 @@ ComponentKind = Literal[
     "voltage_source",
     "current_source",
     "diode",
+    "bjt",
+    "mosfet",
+    "opamp",
 ]
 
 AnalysisKind = Literal["tran", "ac", "op", "dc"]
 
 # SPICE reference-designator prefix for each kind. The first letter of a SPICE
-# element line determines how the simulator interprets it.
+# element line determines how the simulator interprets it. Op-amps are emitted as
+# a subcircuit instance ("X").
 KIND_PREFIX: dict[str, str] = {
     "resistor": "R",
     "capacitor": "C",
@@ -33,6 +39,24 @@ KIND_PREFIX: dict[str, str] = {
     "voltage_source": "V",
     "current_source": "I",
     "diode": "D",
+    "bjt": "Q",
+    "mosfet": "M",
+    "opamp": "X",
+}
+
+# Terminal names per kind, in the order they appear in Component.nodes. Used for
+# the review-table legend and to know how many terminals each device has. The
+# MOSFET bulk (4th) is optional -- it defaults to the source when omitted.
+KIND_TERMINALS: dict[str, list[str]] = {
+    "resistor": ["n1", "n2"],
+    "capacitor": ["n1", "n2"],
+    "inductor": ["n1", "n2"],
+    "voltage_source": ["+", "-"],
+    "current_source": ["+", "-"],
+    "diode": ["anode", "cathode"],
+    "bjt": ["C", "B", "E"],
+    "mosfet": ["D", "G", "S", "B"],
+    "opamp": ["IN+", "IN-", "OUT"],
 }
 
 
@@ -55,7 +79,14 @@ class Component(BaseModel):
     )
     model: str | None = Field(
         default=None,
-        description="Optional SPICE .model name (mainly for diodes).",
+        description="Optional SPICE .model name (for diodes, transistors, MOSFETs).",
+    )
+    subtype: str | None = Field(
+        default=None,
+        description=(
+            "Device polarity/variant when it matters: 'npn'/'pnp' for a BJT, "
+            "'nmos'/'pmos' for a MOSFET. Ignored for other kinds."
+        ),
     )
     confidence: float = Field(
         default=1.0,

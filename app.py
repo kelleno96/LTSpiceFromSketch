@@ -19,7 +19,11 @@ COMPONENT_KINDS = [
     "voltage_source",
     "current_source",
     "diode",
+    "bjt",
+    "mosfet",
+    "opamp",
 ]
+SUBTYPES = ["", "npn", "pnp", "nmos", "pmos"]
 ANALYSIS_KINDS = ["tran", "ac", "op", "dc"]
 
 st.set_page_config(page_title="Sketch -> LTspice", layout="wide")
@@ -29,14 +33,17 @@ st.title("Hand-drawn circuit -> LTspice simulation")
 def circuit_to_rows(circuit: Circuit) -> list[dict]:
     rows = []
     for c in circuit.components:
-        nodes = list(c.nodes) + ["", ""]
+        nodes = list(c.nodes) + ["", "", "", ""]
         rows.append(
             {
                 "ref": c.ref,
                 "kind": c.kind,
-                "node+": nodes[0],
-                "node-": nodes[1],
+                "n1": nodes[0],
+                "n2": nodes[1],
+                "n3": nodes[2],
+                "n4": nodes[3],
                 "value": c.value,
+                "subtype": c.subtype or "",
                 "model": c.model or "",
                 "confidence": c.confidence,
             }
@@ -61,13 +68,17 @@ def rows_to_components(df: pd.DataFrame) -> list[Component]:
             continue  # skip blank / half-filled rows
         conf_raw = r.get("confidence")
         conf = 1.0 if conf_raw is None or (isinstance(conf_raw, float) and pd.isna(conf_raw)) else float(conf_raw)
+        nodes = [_cell(r, "n1"), _cell(r, "n2"), _cell(r, "n3"), _cell(r, "n4")]
+        while nodes and nodes[-1] == "":  # drop unused trailing terminals
+            nodes.pop()
         comps.append(
             Component(
                 ref=ref,
                 kind=kind,
-                nodes=[_cell(r, "node+"), _cell(r, "node-")],
+                nodes=nodes,
                 value=_cell(r, "value"),
                 model=_cell(r, "model") or None,
+                subtype=_cell(r, "subtype") or None,
                 confidence=min(1.0, max(0.0, conf)),
             )
         )
@@ -128,8 +139,10 @@ if circuit is not None:
     a_args = meta4.text_input("Analysis args", circuit.analysis.args)
 
     st.caption(
-        "Edit components below. Two-terminal parts only; use '0' for ground. "
-        "For sources, node+ is the positive terminal."
+        "Edit components below; use '0' for ground. Terminal order (n1…n4) by kind — "
+        "**R/L/C:** n1, n2 · **source:** +, − (n1 = +) · **diode:** anode, cathode · "
+        "**bjt:** C, B, E · **mosfet:** D, G, S, (bulk) · **opamp:** IN+, IN−, OUT. "
+        "Set **subtype** (npn/pnp/nmos/pmos) for transistors."
     )
     edited = st.data_editor(
         pd.DataFrame(circuit_to_rows(circuit)),
@@ -137,6 +150,7 @@ if circuit is not None:
         use_container_width=True,
         column_config={
             "kind": st.column_config.SelectboxColumn("kind", options=COMPONENT_KINDS),
+            "subtype": st.column_config.SelectboxColumn("subtype", options=SUBTYPES, required=False),
             "confidence": st.column_config.NumberColumn(
                 "confidence", min_value=0.0, max_value=1.0, step=0.05, format="%.2f"
             ),
