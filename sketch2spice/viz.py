@@ -22,8 +22,13 @@ SHUNT_DX = 1.4  # offset for a 2nd/3rd shunt on the same node
 
 # Kinds with more than two terminals -- these don't fit the ladder layout, so a
 # circuit containing any of them is drawn with the net-label renderer instead.
-_MULTI = {"bjt", "mosfet", "opamp"}
-_TWO_TERM = {"resistor", "capacitor", "inductor", "voltage_source", "current_source", "diode"}
+# vcvs/vccs (E/G) have two control terminals in addition to their output pair;
+# cccs/ccvs (F/H) sense a current instead, so they stay two-terminal.
+_MULTI = {"bjt", "mosfet", "opamp", "vcvs", "vccs"}
+_TWO_TERM = {
+    "resistor", "capacitor", "inductor", "voltage_source", "current_source",
+    "diode", "zener", "led", "cccs", "ccvs",
+}
 
 
 def _is_gnd(net: str, ground: str) -> bool:
@@ -43,10 +48,14 @@ def _element(comp: Component):
         return elm.Inductor()
     if k == "diode":
         return elm.Diode()
+    if k == "zener":
+        return elm.Zener()
+    if k == "led":
+        return elm.LED()
     if k == "current_source":
         return elm.SourceI()
     if k == "voltage_source":
-        if comp.value and re.search(r"sin|pulse|ac\b", comp.value, re.I):
+        if comp.value and re.search(r"sin|pulse|pwl|ac\b", comp.value, re.I):
             return elm.SourceSin()
         return elm.SourceV()
     if k == "bjt":
@@ -55,6 +64,10 @@ def _element(comp: Component):
         return elm.PFet() if sub in ("pmos", "pfet", "p") else elm.NFet()
     if k == "opamp":
         return elm.Opamp()
+    if k in ("vcvs", "vccs"):
+        return elm.SourceControlledV() if k == "vcvs" else elm.SourceControlledI()
+    if k in ("cccs", "ccvs"):
+        return elm.SourceControlledI() if k == "cccs" else elm.SourceControlledV()
     return elm.Resistor()
 
 
@@ -67,12 +80,19 @@ def _terminal_anchors(comp: Component) -> list[tuple[str, str]]:
         return [("drain", "D"), ("gate", "G"), ("source", "S")]
     if k == "opamp":  # nodes order is IN+, IN-, OUT
         return [("in2", "IN+"), ("in1", "IN-"), ("out", "OUT")]
+    # vcvs/vccs draw as a 2-lead controlled-source symbol; the control-terminal
+    # nodes have no anchor to sit on and are appended to the label text instead
+    # (see _render_net_labels).
     t = KIND_TERMINALS.get(k, ["n1", "n2"])
     return [("start", t[0]), ("end", t[1])]
 
 
 def _label(comp: Component) -> str:
-    detail = comp.value or (comp.model or "")
+    if comp.kind in ("cccs", "ccvs"):
+        gain = comp.value or "1"
+        detail = f"{gain} x I({comp.model})" if comp.model else gain
+    else:
+        detail = comp.value or (comp.model or "")
     return f"{comp.ref}\n{detail}" if detail else comp.ref
 
 
@@ -143,8 +163,16 @@ def _render_net_labels(circuit: Circuit) -> bytes:
         if comp.kind in _TWO_TERM:
             e = e.right()
         e = e.label(_label(comp), loc="top", color=_label_color(comp))
-        for (anchor, term), net in zip(_terminal_anchors(comp), comp.nodes):
+        anchors = _terminal_anchors(comp)
+        for (anchor, term), net in zip(anchors, comp.nodes):
             e = e.label(f"{term}={net}", loc=anchor, fontsize=9, color="#2f6fb0")
+        # Terminals beyond what the symbol has a lead for (e.g. a vcvs/vccs's
+        # control pair) get named in text rather than dropped silently.
+        extra_terms = KIND_TERMINALS.get(comp.kind, [])[len(anchors):]
+        extra_nodes = comp.nodes[len(anchors):]
+        extra_label = " ".join(f"{t}={n}" for t, n in zip(extra_terms, extra_nodes) if n)
+        if extra_label:
+            e = e.label(extra_label, loc="bottom", fontsize=8, color="#2f6fb0")
         d += e
 
     d.draw(show=False)

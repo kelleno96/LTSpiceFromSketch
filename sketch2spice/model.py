@@ -22,9 +22,15 @@ ComponentKind = Literal[
     "voltage_source",
     "current_source",
     "diode",
+    "zener",
+    "led",
     "bjt",
     "mosfet",
     "opamp",
+    "vcvs",
+    "vccs",
+    "cccs",
+    "ccvs",
 ]
 
 AnalysisKind = Literal["tran", "ac", "op", "dc"]
@@ -39,9 +45,15 @@ KIND_PREFIX: dict[str, str] = {
     "voltage_source": "V",
     "current_source": "I",
     "diode": "D",
+    "zener": "D",
+    "led": "D",
     "bjt": "Q",
     "mosfet": "M",
     "opamp": "X",
+    "vcvs": "E",
+    "vccs": "G",
+    "cccs": "F",
+    "ccvs": "H",
 }
 
 # Terminal names per kind, in the order they appear in Component.nodes. Used for
@@ -54,9 +66,18 @@ KIND_TERMINALS: dict[str, list[str]] = {
     "voltage_source": ["+", "-"],
     "current_source": ["+", "-"],
     "diode": ["anode", "cathode"],
+    "zener": ["anode", "cathode"],
+    "led": ["anode", "cathode"],
     "bjt": ["C", "B", "E"],
     "mosfet": ["D", "G", "S", "B"],
     "opamp": ["IN+", "IN-", "OUT"],
+    # Dependent sources: E (VCVS) and G (VCCS) sense a voltage across two control
+    # terminals; F (CCCS) and H (CCVS) instead sense current through a named
+    # controlling voltage source, given in Component.model rather than a node.
+    "vcvs": ["OUT+", "OUT-", "CTRL+", "CTRL-"],
+    "vccs": ["OUT+", "OUT-", "CTRL+", "CTRL-"],
+    "cccs": ["OUT+", "OUT-"],
+    "ccvs": ["OUT+", "OUT-"],
 }
 
 
@@ -79,7 +100,11 @@ class Component(BaseModel):
     )
     model: str | None = Field(
         default=None,
-        description="Optional SPICE .model name (for diodes, transistors, MOSFETs).",
+        description=(
+            "Optional SPICE .model name (for diodes, transistors, MOSFETs). For a "
+            "cccs/ccvs (current-controlled source), this is instead the ref of the "
+            "voltage source whose current it senses, e.g. 'V1'."
+        ),
     )
     subtype: str | None = Field(
         default=None,

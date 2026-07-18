@@ -30,10 +30,16 @@ class SimResult:
     x_name: str  # "time", "frequency", ...
     x: np.ndarray
     traces: dict[str, np.ndarray] = field(default_factory=dict)
+    complex_traces: dict[str, np.ndarray] = field(default_factory=dict)
     log: str = ""
 
     def signal_names(self) -> list[str]:
         return list(self.traces.keys())
+
+    @property
+    def is_ac(self) -> bool:
+        """True for an AC sweep, where traces carry magnitude *and* phase."""
+        return self.x_name.lower().startswith("freq") and bool(self.complex_traces)
 
 
 def run(netlist_text: str, work_dir: str | Path | None = None) -> SimResult:
@@ -74,9 +80,15 @@ def run(netlist_text: str, work_dir: str | Path | None = None) -> SimResult:
     axis = np.abs(axis) if np.any(axis.imag) else axis.real
 
     traces: dict[str, np.ndarray] = {}
+    complex_traces: dict[str, np.ndarray] = {}
     for name in names[1:]:
         wave = np.asarray(raw.get_trace(name).get_wave(), dtype=complex)
-        # Real analyses give real waves; magnitude for genuinely complex (AC) results.
-        traces[name] = np.abs(wave) if np.iscomplexobj(wave) and np.any(wave.imag) else wave.real
+        # Real analyses give real waves; magnitude+phase for genuinely complex (AC)
+        # results -- keep the complex wave too so callers can plot phase / a Bode.
+        if np.any(wave.imag):
+            traces[name] = np.abs(wave)
+            complex_traces[name] = wave
+        else:
+            traces[name] = wave.real
 
-    return SimResult(x_name=x_name, x=axis, traces=traces, log=log)
+    return SimResult(x_name=x_name, x=axis, traces=traces, complex_traces=complex_traces, log=log)

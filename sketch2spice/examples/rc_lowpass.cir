@@ -1,0 +1,6 @@
+* RC low-pass filter
+V1 in 0 SINE(0 5 1k)
+R1 in out 1k
+C1 out 0 159n
+.tran 5m
+.end

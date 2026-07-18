@@ -31,7 +31,10 @@ def parse_si(token: str) -> float | None:
     suffix = (m.group(2) or "").lower()
     return val * _SI.get(suffix, 1.0)
 
-# LTspice standard-library symbol name for each component kind.
+# LTspice standard-library symbol name for each component kind. Kinds with no
+# entry (multi-terminal actives, dependent sources) have no simple 2-pin stock
+# symbol to place on the grid layout below, so to_asc skips them with a comment
+# rather than guessing at a layout -- the netlist (.cir) stays authoritative.
 KIND_SYMBOL: dict[str, str] = {
     "resistor": "res",
     "capacitor": "cap",
@@ -39,6 +42,8 @@ KIND_SYMBOL: dict[str, str] = {
     "voltage_source": "voltage",
     "current_source": "current",
     "diode": "diode",
+    "zener": "diode",  # closest stock 2-pin symbol; BV lives in the .model line
+    "led": "diode",
 }
 
 # Pin offsets (dx, dy) from a symbol's placement origin, for R0 orientation, in
@@ -99,6 +104,27 @@ def to_netlist(circuit: Circuit) -> str:
             model = comp.model or "Dgeneric"
             models[model] = f".model {model} D"
             lines.append(f"{ref} {' '.join(nodes[:2])} {model}")
+
+        elif comp.kind == "zener":
+            model = comp.model or f"DZ_{ref}"
+            models[model] = f".model {model} D(BV={comp.value or '5.1'})"
+            lines.append(f"{ref} {' '.join(nodes[:2])} {model}")
+
+        elif comp.kind == "led":
+            # Generic red-LED parameters (~1.8-2V forward drop) -- good enough for
+            # "does this light up / limit current correctly" teaching circuits.
+            model = comp.model or "DLED"
+            models[model] = f".model {model} D(IS=93.2p RS=42m N=3.73 EG=1.9 XTI=1)"
+            lines.append(f"{ref} {' '.join(nodes[:2])} {model}")
+
+        elif comp.kind in ("vcvs", "vccs"):
+            # E/G: gain (V/V or A/V) senses the voltage between the two control nodes.
+            lines.append(f"{ref} {' '.join(nodes[:4])} {comp.value or '1'}")
+
+        elif comp.kind in ("cccs", "ccvs"):
+            # F/H: gain (A/A or V/A) senses the current through a named V source.
+            vref = comp.model or ""
+            lines.append(f"{ref} {' '.join(nodes[:2])} {vref} {comp.value or '1'}".rstrip())
 
         elif comp.kind == "bjt":
             npn = (comp.subtype or "npn").lower() != "pnp"
@@ -184,20 +210,28 @@ def to_asc(circuit: Circuit) -> str:
     """Render ``circuit`` as a best-effort LTspice ``.asc`` schematic.
 
     Symbols are placed left-to-right on a grid; nets connect by shared FLAG labels.
-    Good enough to open, view, and hand-edit; not a tidy hand-drawn layout.
+    Good enough to open, view, and hand-edit; not a tidy hand-drawn layout. Kinds
+    with no stock 2-pin symbol (transistors, op-amps, dependent sources) are
+    listed as a comment instead of placed -- the netlist (.cir) has them.
     """
     gmap = _ground_map(circuit)
-    n = len(circuit.components)
+    drawable = [c for c in circuit.components if c.kind in KIND_SYMBOL]
+    skipped = [c for c in circuit.components if c.kind not in KIND_SYMBOL]
 
     spacing = 192
     x0, y0 = 96, 96
-    width = max(880, x0 + n * spacing + 200)
+    width = max(880, x0 + len(drawable) * spacing + 200)
 
     lines = ["Version 4", f"SHEET 1 {width} 680"]
-    for i, comp in enumerate(circuit.components):
+    for i, comp in enumerate(drawable):
         lines.extend(_asc_symbol_block(comp, x0 + i * spacing, y0, gmap))
 
     # SPICE analysis directive as a schematic directive (leading '!').
     directive = f".{circuit.analysis.type} {circuit.analysis.args}".rstrip()
     lines.append(f"TEXT {x0} {y0 + 320} Left 2 !{directive}")
+    if skipped:
+        # Plain schematic annotation (no leading '!' -- that marks a SPICE
+        # directive, and this is just a note for whoever opens the file).
+        refs = ", ".join(_ref(c) for c in skipped)
+        lines.append(f"TEXT {x0} {y0 + 380} Left 2 Not drawn here (see .cir): {refs}")
     return "\n".join(lines) + "\n"

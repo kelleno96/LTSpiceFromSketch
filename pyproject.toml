@@ -12,6 +12,7 @@ dependencies = [
     "schemdraw>=0.19",
     "streamlit>=1.36",
     "numpy>=1.26",
+    "plotly>=5.22",
 ]
 
 [build-system]
