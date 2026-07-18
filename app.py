@@ -40,6 +40,40 @@ COMPONENT_KINDS = [
 SUBTYPES = ["", "npn", "pnp", "nmos", "pmos"]
 ANALYSIS_KINDS = ["tran", "ac", "op", "dc"]
 
+# One-click "how do I drive this?" presets. Each fills the input source's value
+# with a concrete SPICE waveform *and* sets the matching analysis + args, since
+# the two have to agree (a bare "AC" source does nothing in a .tran, and .ac
+# ignores a SINE(...) waveform). Everything lands in editable fields, so these
+# are just sensible starting points the student can tweak.
+STIMULUS_PRESETS: dict[str, dict[str, str]] = {
+    "AC sweep → Bode": {
+        "value": "AC 1",
+        "type": "ac",
+        "args": "dec 20 0.1 1meg",
+        "help": "Frequency response: gain/phase vs. frequency. 1 V AC stimulus, "
+        "swept 0.1 Hz–1 MHz. Widen the range in Analysis args if your corner "
+        "frequency falls outside it.",
+    },
+    "Sine → transient": {
+        "value": "SINE(0 1 1k)",
+        "type": "tran",
+        "args": "5m",
+        "help": "Time-domain response to a 1 V, 1 kHz sine (5 ms window ≈ 5 cycles).",
+    },
+    "Pulse/step → transient": {
+        "value": "PULSE(0 1 0 10u 10u 2m 4m)",
+        "type": "tran",
+        "args": "10m",
+        "help": "Step/square response: 0→1 V pulses, 2 ms high every 4 ms.",
+    },
+    "DC level → bias": {
+        "value": "DC 1",
+        "type": "op",
+        "args": "",
+        "help": "Hold the input at a fixed 1 V DC and solve the operating point.",
+    },
+}
+
 st.set_page_config(page_title="Sketch -> LTspice", layout="wide")
 st.title("Hand-drawn circuit -> LTspice simulation")
 
@@ -97,6 +131,83 @@ def rows_to_components(df: pd.DataFrame) -> list[Component]:
             )
         )
     return comps
+
+
+_INPUT_NET_NAMES = {"in", "vin", "input", "source", "sig", "signal", "vs"}
+
+
+def _pick_input_net(circuit: Circuit, ground: str) -> str | None:
+    """Best guess at the net an input source should drive, when none was drawn.
+
+    Prefers a net named like an input (``vin``/``in``/...); failing that, a
+    floating net (touched by exactly one terminal), which is almost always where
+    a missing source belongs on a hand sketch. Returns None if nothing fits.
+    """
+    counts: dict[str, int] = {}
+    for c in circuit.components:
+        for n in c.nodes:
+            if n:
+                counts[n] = counts.get(n, 0) + 1
+    nongnd = [n for n in counts if n not in (ground, "0")]
+    named = [n for n in nongnd if n.lower() in _INPUT_NET_NAMES or n.lower().startswith(("in", "vin"))]
+    if named:
+        return named[0]
+    floating = [n for n in nongnd if counts[n] == 1]
+    return floating[0] if floating else None
+
+
+def _next_source_ref(circuit: Circuit) -> str:
+    existing = {c.ref.upper() for c in circuit.components}
+    i = 1
+    while f"V{i}" in existing:
+        i += 1
+    return f"V{i}"
+
+
+def apply_stimulus_preset(reviewed: Circuit, preset: dict[str, str]) -> tuple[str, str]:
+    """Set the input source's waveform + the analysis to a preset, preserving edits.
+
+    Works on ``reviewed`` (which already folds in any manual table edits), stores
+    the result as the new base circuit, and bumps ``form_ver`` so the analysis
+    widgets and the data editor remount and re-seed from it. If the circuit has no
+    voltage source (the input wasn't drawn/parsed), synthesizes one driving the
+    best-guess input net. Returns ``(severity, message)`` for a flash notice.
+    """
+    new = reviewed.model_copy(deep=True)
+    new.analysis = Analysis(type=preset["type"], args=preset["args"])
+    analysis_desc = f"{preset['type']} {preset['args']}".strip()
+
+    target = next((c for c in new.components if c.kind == "voltage_source"), None)
+    if target is not None:
+        target.value = preset["value"]
+        flash = ("success", f"Set {target.ref} = {preset['value']}, analysis = {analysis_desc}.")
+    else:
+        ground = new.ground_node or "0"
+        net = _pick_input_net(new, ground)
+        if net is not None:
+            ref = _next_source_ref(new)
+            new.components.insert(
+                0, Component(ref=ref, kind="voltage_source", nodes=[net, ground], value=preset["value"])
+            )
+            flash = (
+                "success",
+                f"No source was drawn — added {ref} = {preset['value']} driving net "
+                f"'{net}' (referenced to {ground}), analysis = {analysis_desc}. "
+                "Rewire it in the table if that's not your input.",
+            )
+        else:
+            flash = (
+                "warning",
+                f"Set analysis to {analysis_desc}, but there's no voltage source and "
+                "no obvious input net to add one to — add a row like "
+                f"V1, voltage_source, <input net>, 0, {preset['value']}.",
+            )
+
+    st.session_state.circuit = new
+    st.session_state.form_ver = st.session_state.get("form_ver", 0) + 1
+    # Keep the netlist textarea in sync so "Run LTspice" uses the preset directly.
+    st.session_state.netlist_text = to_netlist(new)
+    return flash
 
 
 def downscale_image(data: bytes, media_type: str, max_dim: int) -> tuple[bytes, str, tuple[int, int]]:
@@ -398,13 +509,20 @@ if circuit is not None:
     if circuit.notes:
         st.warning(f"Model notes: {circuit.notes}")
 
+    # Bumping form_ver remounts the analysis widgets + data editor so they re-seed
+    # from st.session_state.circuit (used by the stimulus presets below).
+    form_ver = st.session_state.setdefault("form_ver", 0)
+    # Rendered later (after `reviewed` exists) but positioned here, above the table.
+    stimulus_slot = st.container()
+
     meta1, meta2, meta3, meta4 = st.columns(4)
     title = meta1.text_input("Title", circuit.title)
     ground = meta2.text_input("Ground net", circuit.ground_node)
     a_type = meta3.selectbox(
-        "Analysis", ANALYSIS_KINDS, index=ANALYSIS_KINDS.index(circuit.analysis.type)
+        "Analysis", ANALYSIS_KINDS, index=ANALYSIS_KINDS.index(circuit.analysis.type),
+        key=f"analysis_type_{form_ver}",
     )
-    a_args = meta4.text_input("Analysis args", circuit.analysis.args)
+    a_args = meta4.text_input("Analysis args", circuit.analysis.args, key=f"analysis_args_{form_ver}")
 
     st.caption(
         "Edit components below; use '0' for ground. Terminal order (n1…n4) by kind — "
@@ -426,7 +544,7 @@ if circuit is not None:
                 "confidence", min_value=0.0, max_value=1.0, step=0.05, format="%.2f"
             ),
         },
-        key="component_editor",
+        key=f"component_editor_{form_ver}",
     )
 
     reviewed = Circuit(
@@ -436,6 +554,22 @@ if circuit is not None:
         analysis=Analysis(type=a_type, args=a_args),
         notes=circuit.notes,
     )
+
+    # ---- Stimulus presets: one click sets the source waveform + analysis ----
+    with stimulus_slot:
+        st.caption(
+            "**Not sure how to drive it?** Pick an input stimulus — this fills the "
+            "source's value and the analysis settings (which have to match) with an "
+            "editable starting point. Applied to the first voltage source."
+        )
+        preset_cols = st.columns(len(STIMULUS_PRESETS))
+        for col, (name, preset) in zip(preset_cols, STIMULUS_PRESETS.items()):
+            if col.button(name, help=preset["help"], use_container_width=True):
+                st.session_state.stimulus_flash = apply_stimulus_preset(reviewed, preset)
+                st.rerun()
+        flash = st.session_state.pop("stimulus_flash", None)
+        if flash:
+            (st.success if flash[0] == "success" else st.warning)(flash[1])
 
     # ---- Electrical rule check: catch wiring/value mistakes early ----------
     for finding in erc.check(reviewed):
